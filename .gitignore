@@ -1,0 +1,12 @@
+# Reference checkouts pulled in during development; not part of the plugin.
+refs/
+
+# Build artefacts
+tools/*.o
+tools/kalyna_gen
+tools/kalyna128_kernel_check
+
+# Sample run artefacts
+tests/*.tmp
+*.swp
+*.swo
