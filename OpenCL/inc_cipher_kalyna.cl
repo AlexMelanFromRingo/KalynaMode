@@ -152,14 +152,26 @@ DECLSPEC u64 kalyna_mix_one_column (const u64 v)
 }
 
 /*
- * Generic ShiftRows over an NB-word state.
+ * ShiftRows over an NB-word state.
+ *
  * Spec: each row r is shifted left by floor(r * NB / 8) columns. Bytes are
  * laid out so byte b of column c lives in (state[c] >> (b * 8)) & 0xff.
  *
- * We unpack to bytes[NB][8], rotate each row, and repack.
+ * For nb = 2 this is just a swap of the upper 32 bits of the two columns,
+ * so we keep a fast path that avoids byte arrays entirely (some OpenCL
+ * runtimes — notably PoCL — produce flaky code for the generic byte path).
+ * For nb = 4 / 8 the generic byte-shuffle path is used.
  */
 DECLSPEC void kalyna_shift_rows (PRIVATE_AS u64 *state)
 {
+#if KALYNA_NB == 2
+  const u64 lo0 = state[0] & 0x00000000ffffffffUL;
+  const u64 hi0 = state[0] & 0xffffffff00000000UL;
+  const u64 lo1 = state[1] & 0x00000000ffffffffUL;
+  const u64 hi1 = state[1] & 0xffffffff00000000UL;
+  state[0] = lo0 | hi1;
+  state[1] = lo1 | hi0;
+#else
   u8 cols[KALYNA_NB][8];
   u8 out[KALYNA_NB][8];
 
@@ -172,7 +184,6 @@ DECLSPEC void kalyna_shift_rows (PRIVATE_AS u64 *state)
     cols[c][6] = (u8)(v >> 48); cols[c][7] = (u8)(v >> 56);
   }
 
-  /* shift = floor(r * NB / 8) */
   for (int r = 0; r < 8; ++r)
   {
     const int shift = (r * KALYNA_NB) / 8;
@@ -190,6 +201,7 @@ DECLSPEC void kalyna_shift_rows (PRIVATE_AS u64 *state)
              | ((u64) out[c][4] << 32) | ((u64) out[c][5] << 40)
              | ((u64) out[c][6] << 48) | ((u64) out[c][7] << 56);
   }
+#endif
 }
 
 DECLSPEC void kalyna_sub_bytes (PRIVATE_AS u64 *state)
@@ -219,9 +231,16 @@ DECLSPEC void kalyna_xor_words (PRIVATE_AS u64 *dst, PRIVATE_AS const u64 *src)
   for (int i = 0; i < KALYNA_NB; ++i) dst[i] ^= src[i];
 }
 
-/* Rotate the NB-word state left by (2 * NB + 3) bytes (used by KeyExpandOdd). */
+/* Rotate the NB-word state left by (2 * NB + 3) bytes (used by KeyExpandOdd).
+ * NB = 2 has a closed-form fast path (rotation by 7 bytes inside 16). */
 DECLSPEC void kalyna_rotate_state_left (PRIVATE_AS u64 *state)
 {
+#if KALYNA_NB == 2
+  const u64 a = state[0];
+  const u64 b = state[1];
+  state[0] = (a >> 56) | (b << 8);
+  state[1] = (b >> 56) | (a << 8);
+#else
   const int rot = 2 * KALYNA_NB + 3;
   const int total = KALYNA_NB * 8;
 
@@ -245,6 +264,7 @@ DECLSPEC void kalyna_rotate_state_left (PRIVATE_AS u64 *state)
              | ((u64) tmp[c * 8 + 4] << 32) | ((u64) tmp[c * 8 + 5] << 40)
              | ((u64) tmp[c * 8 + 6] << 48) | ((u64) tmp[c * 8 + 7] << 56);
   }
+#endif
 }
 
 /* Rotate K-word vector left by 1 word (used by KeyExpandEven). */

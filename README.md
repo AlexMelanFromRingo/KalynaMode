@@ -1,17 +1,24 @@
 # KalynaMode — Kalyna (DSTU 7624:2014) for hashcat
 
-Adds a known‑plaintext attack mode for the Ukrainian state cipher
+Adds known‑plaintext attack modes for the Ukrainian state cipher
 **Kalyna** (DSTU 7624:2014) to [hashcat](https://github.com/hashcat/hashcat).
 
-* `-m 36000` — Kalyna‑128/128 (block 128 b, key 128 b, 10 rounds) — **fully implemented and tested**
-* `-m 36100` — Kalyna‑128/256 (block 128 b, key 256 b, 14 rounds) — **fully implemented and tested**
-* `-m 36200`, `-m 36300`, `-m 36400` — scaffolded (host reference works, kernels TODO; see *Roadmap*)
+| Mode      | Variant       | Block | Key  | Rounds | Status |
+|-----------|---------------|-------|------|--------|--------|
+| `-m 36000`| Kalyna‑128/128| 128 b | 128 b| 10     | ✅ end‑to‑end (CUDA + PoCL) |
+| `-m 36100`| Kalyna‑128/256| 128 b | 256 b| 14     | ✅ end‑to‑end (CUDA + PoCL¹) |
+| `-m 36200`| Kalyna‑256/256| 256 b | 256 b| 14     | ✅ end‑to‑end (CUDA) |
+| `-m 36300`| Kalyna‑256/512| 256 b | 512 b| 18     | ✅ end‑to‑end (CUDA) |
+| `-m 36400`| Kalyna‑512/512| 512 b | 512 b| 18     | ✅ end‑to‑end (CUDA) |
+
+¹ On PoCL CPU `m36100` cracks correctly with `--self-test-disable`. The
+explicit OpenCL self‑test step there is a false positive — even a stub
+kernel that emits the expected digest fails the same self‑test, so the
+issue is in PoCL's selftest pipeline rather than in this plugin.
 
 ## What it does
 
-Both implemented modes attack one Kalyna block ciphertext where both the
-plaintext and the ciphertext are known and the password *is* the raw
-Kalyna key:
+For every mode, the cracker tests:
 
 ```
 encrypt(key = $pass, plaintext = $salt) == $digest
@@ -23,12 +30,10 @@ Hash format:
 <ciphertext_hex>:<plaintext_hex>
 ```
 
-Each half is exactly one Kalyna block written as hex. For Kalyna‑128
-that is 32 hex chars (16 bytes). The candidate password is treated as
-raw key bytes — 16 bytes for `m36000`, 32 bytes for `m36100`.
-
-This is the same shape hashcat already uses for `-m 14000` (DES KPA) and
-related "raw cipher KPA" modes.
+Each half is exactly one Kalyna block written as hex. The candidate
+password is treated as raw key bytes — the password length must equal
+the variant's key size in bytes (16, 32 or 64). The format is the same
+shape hashcat already uses for `-m 14000` (DES KPA).
 
 ## Quick start
 
@@ -41,44 +46,76 @@ cd hashcat
 git clone --depth 1 https://github.com/AlexMelanFromRingo/KalynaMode.git /tmp/KalynaMode
 /tmp/KalynaMode/apply.sh .
 
-# 3. Build
+# 3. Build hashcat
 make -j
 
-# 4. Build the host‑side hash generator and self‑test
+# 4. Build the host-side hash generator and run its self-test
 make -C /tmp/KalynaMode/tools test
 
-# 5. Generate a hash and crack it
+# 5. Generate a hash and crack it (any of the five variants)
 /tmp/KalynaMode/tools/kalyna_gen 128/128 "MyKalyna1234567!" \
-    "0011223344556677aabbccddeeff0011" > /tmp/test.hash
-echo "MyKalyna1234567!" > /tmp/test.dict
-./hashcat -m 36000 -a 0 /tmp/test.hash /tmp/test.dict
+    "0011223344556677aabbccddeeff0011" > /tmp/k.hash
+echo "MyKalyna1234567!" > /tmp/k.dict
+./hashcat -m 36000 -a 0 /tmp/k.hash /tmp/k.dict
+
+# 32-byte key:
+/tmp/KalynaMode/tools/kalyna_gen 256/256 "test123testtesttesttesttesttest!" \
+    "00112233445566778899aabbccddeeff112233445566778899aabbccddeeff00" > /tmp/k.hash
+echo "test123testtesttesttesttesttest!" > /tmp/k.dict
+./hashcat -m 36200 -a 0 /tmp/k.hash /tmp/k.dict
 ```
 
-## What lives where
+## Generating hashes
+
+`tools/kalyna_gen` takes a `<block_bits>/<key_bits>` variant tag, a
+password, and an optional plaintext (random if omitted):
+
+```sh
+./kalyna_gen 128/128 "<16-byte pw>" [<32-hex pt>]
+./kalyna_gen 128/256 "<32-byte pw>" [<32-hex pt>]
+./kalyna_gen 256/256 "<32-byte pw>" [<64-hex pt>]
+./kalyna_gen 256/512 "<64-byte pw>" [<64-hex pt>]
+./kalyna_gen 512/512 "<64-byte pw>" [<128-hex pt>]
+```
+
+Or `--hex` for raw key bytes:
+
+```sh
+./kalyna_gen --hex 128/128 <32-hex-key> <32-hex-pt>
+```
+
+## Layout
 
 ```
-src/modules/module_36000.c   - hashcat host‑side module (mode 36000)
-src/modules/module_36100.c   - hashcat host‑side module (mode 36100)
-OpenCL/inc_cipher_kalyna.h   - device‑side API
-OpenCL/inc_cipher_kalyna.cl  - device‑side Kalyna implementation,
-                                parameterised at compile time via
-                                KALYNA_NB / KALYNA_NK / KALYNA_NR
-OpenCL/m36000_a{0,1,3}-pure.cl  - kernels for attack modes 0/1/3
-OpenCL/m36100_a{0,1,3}-pure.cl  - kernels for attack modes 0/1/3
+src/modules/module_36000.c   - Kalyna-128/128 module
+src/modules/module_36100.c   - Kalyna-128/256 module
+src/modules/module_36200.c   - Kalyna-256/256 module
+src/modules/module_36300.c   - Kalyna-256/512 module
+src/modules/module_36400.c   - Kalyna-512/512 module
+
+OpenCL/inc_cipher_kalyna.h   - device-side public API
+OpenCL/inc_cipher_kalyna.cl  - device-side Kalyna (KALYNA_NB / NK / NR
+                                are compile-time parameters set by each
+                                kernel)
+OpenCL/m360{00,100,200,300,400}_a{0,3}-pure.cl  - kernels
+OpenCL/m360{00,100,200}_a1-pure.cl              - combinator kernels
+                                                  for the small-key modes
+
 tools/kalyna.{c,h}           - portable host reference for all five
-                                DSTU variants (128/128 ... 512/512)
-tools/kalyna_tables.h        - S‑box tables
-tools/kalyna_gen.c           - hash generator + self‑test against the
-                                published DSTU vectors
-tools/kalyna128_kernel_check.c  - cross‑check that the GPU kernel
-                                algorithm matches the reference
+                                DSTU variants
+tools/kalyna_tables.h        - S-box tables
+tools/kalyna_gen.c           - hash generator + self-test
+tools/kalyna128_kernel_check.c - cross-checks the device-side
+                                  Kalyna-128/128 algebra against the
+                                  reference implementation
+
 apply.sh                     - copies plugin files into a hashcat tree
 ```
 
-## Self‑test
+## Self-test
 
-The host‑side reference reproduces every Kalyna ciphertext from the
-DSTU 7624:2014 reference vectors:
+The host-side reference matches every Kalyna ciphertext from the DSTU
+reference vectors:
 
 ```text
 Kalyna-128/128 ct = 81bf1c7d779bac20e1c9ea39b4d2ad06
@@ -91,23 +128,27 @@ Kalyna-512/512 ct = 4a26e31b811c356aa61dd6ca0596231a67ba8354aa47f3a13e1deec320eb
 
 Run `make -C tools test` to verify locally.
 
-## Hashcat side benchmarks
+## Design notes
 
-On an RTX 4080 SUPER (`-m 36000`):
+The device-side implementation lives in a single
+`inc_cipher_kalyna.cl`, parameterised at compile time via
+`KALYNA_NB`/`KALYNA_NK`/`KALYNA_NR`. Each `m36X00_*-pure.cl` kernel
+file `#define`s those macros and includes the inc; the JIT compiler
+unrolls the resulting fixed-size loops.
 
-```
-Speed.#01........:   232.6 MH/s (87.98ms) @ Accel:4 Loops:256 Thr:256 Vec:1
-```
+For 256‑ and 512‑bit blocks the ciphertext is bigger than the 16 bytes
+hashcat's `find_hash`/`COMPARE_*` macros compare. The `_mxx`
+multi-hash kernels still bitmap-filter on the first 4 u32 to keep the
+fast path, then explicitly verify the remaining ciphertext words
+against the matched digest before calling `mark_hash`. The `_sxx`
+single-hash kernels diff the entire ciphertext directly.
 
-## Roadmap
+## Known issues
 
-`m36200` / `m36300` / `m36400` need a custom comparison path because
-hashcat's stock `find_hash` / `COMPARE_*_SIMD` macros only diff the
-first 4 u32 of the digest, which is fine for a 16‑byte ciphertext but
-admits false positives for 32‑ or 64‑byte ciphertexts. The host
-reference already produces correct ciphertexts for those variants;
-adding the kernels just means writing an explicit full‑block compare
-on top of the existing scaffolding.
+* PoCL CPU may emit a noisy `OpenCL kernel self-test failed` warning for
+  `m36100`. Cracking itself works correctly with `--self-test-disable`.
+* No combinator (`-a 1`) kernels for `m36300` / `m36400` (combinators
+  on raw 64‑byte keys are not a typical use case).
 
 ## Licence
 

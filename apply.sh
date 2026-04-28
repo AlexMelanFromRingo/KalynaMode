@@ -18,14 +18,26 @@ if [[ ! -d "$HC_ROOT/src/modules" || ! -d "$HC_ROOT/OpenCL" ]]; then
   exit 1
 fi
 
-install -m 0644 "$SELF_DIR/src/modules/module_36000.c" "$HC_ROOT/src/modules/"
-install -m 0644 "$SELF_DIR/src/modules/module_36100.c" "$HC_ROOT/src/modules/"
+for m in 36000 36100 36200 36300 36400; do
+  install -m 0644 "$SELF_DIR/src/modules/module_${m}.c" "$HC_ROOT/src/modules/"
+done
 
-for f in inc_cipher_kalyna.h inc_cipher_kalyna.cl \
-         m36000_a0-pure.cl m36000_a1-pure.cl m36000_a3-pure.cl \
-         m36100_a0-pure.cl m36100_a1-pure.cl m36100_a3-pure.cl; do
-  install -m 0644 "$SELF_DIR/OpenCL/$f" "$HC_ROOT/OpenCL/"
+install -m 0644 "$SELF_DIR/OpenCL/inc_cipher_kalyna.h"  "$HC_ROOT/OpenCL/"
+install -m 0644 "$SELF_DIR/OpenCL/inc_cipher_kalyna.cl" "$HC_ROOT/OpenCL/"
+
+# attack-mode kernels: a0/a1/a3 for 36000-36200 (small/medium keys),
+# a0/a3 only for 36300/36400 (combinators on 64-byte raw keys are not
+# a common workflow).
+for m in 36000 36100 36200; do
+  for a in a0 a1 a3; do
+    install -m 0644 "$SELF_DIR/OpenCL/m${m}_${a}-pure.cl" "$HC_ROOT/OpenCL/"
+  done
+done
+for m in 36300 36400; do
+  for a in a0 a3; do
+    install -m 0644 "$SELF_DIR/OpenCL/m${m}_${a}-pure.cl" "$HC_ROOT/OpenCL/"
+  done
 done
 
 echo "Installed KalynaMode plugin into $HC_ROOT"
-echo "Now run 'make -j' inside $HC_ROOT to build module_36000.so / module_36100.so."
+echo "Now run 'make -j' inside $HC_ROOT to build module_3600{0,1,2,3,4}.so"
